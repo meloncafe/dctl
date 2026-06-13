@@ -76,12 +76,54 @@ self_update() {
   info "updating dctl in $src_dir"
   # ignore exec-bit (chmod) changes so install.sh's chmod never blocks the pull
   git -C "$src_dir" config core.fileMode false
-  if ! git -C "$src_dir" pull --ff-only; then
-    err "self-update: fast-forward failed — you have local commits or changes in $src_dir."
+
+  git -C "$src_dir" fetch --quiet origin || die "self-update: could not reach origin"
+
+  local branch upstream local_sha remote_sha base
+  branch="$(git -C "$src_dir" rev-parse --abbrev-ref HEAD)"
+  upstream="origin/$branch"
+  local_sha="$(git -C "$src_dir" rev-parse HEAD)"
+  remote_sha="$(git -C "$src_dir" rev-parse "$upstream" 2>/dev/null || echo "")"
+
+  if [[ -z "$remote_sha" ]]; then
+    die "self-update: no upstream '$upstream'. reinstall via bootstrap."
+  fi
+  if [[ "$local_sha" == "$remote_sha" ]]; then
+    ok "dctl is already up to date."
+    return 0
+  fi
+
+  base="$(git -C "$src_dir" merge-base HEAD "$upstream" 2>/dev/null || echo "")"
+
+  # Uncommitted local changes block any update path; surface them first.
+  if [[ -n "$(git -C "$src_dir" status --porcelain)" ]]; then
+    err "self-update: you have uncommitted changes in $src_dir."
     err "  inspect: git -C $src_dir status"
-    err "  then:    git -C $src_dir stash   (or commit/reset) and retry 'dctl self-update'"
+    err "  reset:   git -C $src_dir checkout -- .   (discards local edits) then retry"
     exit 1
   fi
+
+  if [[ -n "$base" && "$base" == "$local_sha" ]]; then
+    # Fast-forward is safe: local is a strict ancestor of upstream.
+    git -C "$src_dir" merge --ff-only "$upstream" --quiet \
+      || die "self-update: fast-forward failed unexpectedly"
+  elif [[ -n "$base" && "$base" == "$remote_sha" ]]; then
+    # Local has commits not on the remote.
+    err "self-update: $src_dir has local commits not on $upstream."
+    err "  to discard them and match upstream:"
+    err "    git -C $src_dir reset --hard $upstream"
+    err "  (your registry lives in ~/.config/dctl and is not affected)"
+    exit 1
+  else
+    # Histories diverged — typically an upstream force-push (e.g. a squash).
+    err "self-update: local history has diverged from $upstream (upstream was likely force-pushed)."
+    err "  to match upstream exactly:"
+    err "    git -C $src_dir reset --hard $upstream"
+    err "  (this only touches the dctl checkout; your registry in ~/.config/dctl is untouched)"
+    err "  then re-run: dctl self-update"
+    exit 1
+  fi
+
   [[ -f "$src_dir/install.sh" ]] && bash "$src_dir/install.sh"
   ok "dctl is up to date."
 }
