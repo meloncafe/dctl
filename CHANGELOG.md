@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-13
+
+Patch. No breaking changes.
+
+### Fixed
+
+- **`self-update` now diagnoses why a fast-forward can't happen.** It used to
+  run `git pull --ff-only` and, on failure, always blamed local commits or
+  changes — misleading after an upstream force-push (e.g. a squash), which left
+  a checkout stuck on a raw "Not possible to fast-forward" git error. It now
+  fetches and classifies the state, then prints the right recovery:
+  up-to-date (no-op), behind (fast-forwards), uncommitted changes
+  (`git checkout -- .`), local commits ahead (`git reset --hard <upstream>`),
+  or diverged history from a force-push (`git reset --hard <upstream>`, noting
+  the registry in `~/.config/dctl` is untouched).
+
 ## [0.4.0] - 2026-06-13
 
 Feature expansion. No breaking changes.
@@ -118,7 +134,8 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/meloncafe/dctl/releases/tag/v0.4.1
 [0.4.0]: https://github.com/meloncafe/dctl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/meloncafe/dctl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/meloncafe/dctl/releases/tag/v0.2.0
