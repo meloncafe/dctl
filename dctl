@@ -172,6 +172,11 @@ validate() {
 # usage: run_compose <compose-args...>
 run_compose() {
   local fargs; fargs="$(compose_fargs "$FILES")"
+  if [[ -n "${DCTL_DRY_RUN:-}" ]]; then
+    local where; if [[ -z "$NODE" ]]; then where="local: $PATH_"; else where="ssh $NODE: $PATH_"; fi
+    info "[dry-run] ($where) docker compose$fargs $*"
+    return 0
+  fi
   if [[ -z "$NODE" ]]; then
     ( cd "$PATH_" 2>/dev/null || die "no such directory: $PATH_"
       # shellcheck disable=SC2086
@@ -209,6 +214,11 @@ run_hook() {
   [[ -n "$SVC" ]] || return 0
   local hook; hook="$(get_field "$SVC" "$1")"
   [[ -n "$hook" ]] || return 0
+  if [[ -n "${DCTL_DRY_RUN:-}" ]]; then
+    local where; if [[ -z "$NODE" ]]; then where="local"; else where="ssh $NODE"; fi
+    info "[dry-run] hook $1 ($where): $hook"
+    return 0
+  fi
   info "hook ($1): $hook"
   if [[ -z "$NODE" ]]; then
     ( cd "$PATH_" 2>/dev/null || die "no such directory: $PATH_"; eval "$hook" )
@@ -238,11 +248,13 @@ usage() {
 dctl — unified docker compose controller
 
 USAGE:
-  dctl <command> [service|--] [extra compose args...]
+  dctl <command> [service...|--] [extra compose args...]
 
 TARGET RESOLUTION:
   (omitted)      operate on the compose project in the current directory
   <service>      look up path/node/files/hooks from the registry
+  <svc1 svc2..>  act on several services in turn (not for exec/logs/config)
+  --all          act on every registered service
   remote nodes   set 'node = <ssh-host>' under the service section in registry
 
 COMMANDS:
@@ -265,6 +277,8 @@ COMMANDS:
   help           this help
 
 GLOBAL FLAGS:
+  --all          target every registered service
+  --dry-run, -n  print what would run without executing
   --no-color     disable colored output (also respects NO_COLOR)
   --quiet, -q    suppress info/ok/warn messages (errors still shown)
 
@@ -272,7 +286,9 @@ EXAMPLES:
   dctl restart                  # current directory
   dctl logs web                 # by service name
   dctl exec db psql -U postgres
-  dctl restart worker           # remote if worker.node is set
+  dctl restart web db api       # several services in turn
+  dctl up --all                 # every registered service
+  dctl restart worker -n        # dry-run: show steps, run nothing
   dctl validate                 # sanity-check the registry
   dctl self-update              # upgrade dctl itself
   TAIL=100 dctl logs api
@@ -284,50 +300,12 @@ REGISTRY:
 EOF
 }
 
-# ---------- entry point ----------
-main() {
-  set -euo pipefail
-
-  # Global flags consumed anywhere on the line: --no-color, --quiet/-q.
-  # Remaining args keep their order for command/target parsing.
-  local rest=() a
-  for a in "$@"; do
-    case "$a" in
-      --no-color) DCTL_NO_COLOR=1 ;;
-      --quiet|-q) DCTL_QUIET=1 ;;
-      *) rest+=("$a") ;;
-    esac
-  done
-  set -- "${rest[@]:-}"
-
-  local cmd="${1:-help}"; shift || true
-
-  # A leading non-flag arg is treated as the service/target.
-  local target=""
-  if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
-    # for exec/logs/ps the first arg may be a service OR a compose passthrough;
-    # treat it as a service if it matches a registered name, else as cwd.
-    if [[ -f "$REGISTRY" ]] && list_services 2>/dev/null | grep -qx "$1"; then
-      target="$1"; shift
-    elif [[ "$cmd" =~ ^(up|down|restart|update|pull|logs|ps|exec|config|stats|pause|unpause|prune)$ ]] && [[ -z "${target}" ]] && [[ "$1" != *.* ]] && [[ ! -e "$1" ]]; then
-      # unknown bare word for a target-taking command: let resolve() error clearly
-      target="$1"; shift
-    fi
-  fi
-
-  # globals consumed by resolve/run_compose/run_hook
-  NODE=""; PATH_=""; FILES=""; SVC=""
-
-  case "$cmd" in
-    list|ls)   list_services; exit 0 ;;
-    validate|doctor) validate; exit $? ;;
-    edit)      edit_registry; exit $? ;;
-    self-update|selfupdate|upgrade) self_update; exit 0 ;;
-    help|-h|--help) usage; exit 0 ;;
-  esac
-
-  resolve "$target"
-
+# Execute a command against the already-resolved target (resolve must have run
+# first to set NODE/PATH_/FILES/SVC). Kept separate from main so it can be
+# called per-service in multi-service mode.
+# usage: dispatch_command <cmd> [passthrough compose args...]
+dispatch_command() {
+  local cmd="$1"; shift
   case "$cmd" in
     up)
       run_hook pre_up
@@ -346,7 +324,9 @@ main() {
       run_compose pull
       compose_up
       run_hook post_up
-      run_compose logs --tail "${TAIL:-20}" -f
+      # In multi-service mode, skip the trailing follow so the loop can proceed;
+      # following the first service's logs would block the rest.
+      [[ -n "${DCTL_MULTI:-}" ]] || run_compose logs --tail "${TAIL:-20}" -f
       ;;
     update)
       run_hook pre_up
@@ -363,10 +343,109 @@ main() {
     pause)     run_compose pause "$@" ;;
     unpause)   run_compose unpause "$@" ;;
     prune)
-      if [[ -z "$NODE" ]]; then docker system prune -f; else ssh -t "$NODE" 'docker system prune -f'; fi
+      if [[ -n "${DCTL_DRY_RUN:-}" ]]; then
+        info "[dry-run] docker system prune -f${NODE:+ (ssh $NODE)}"
+      elif [[ -z "$NODE" ]]; then docker system prune -f
+      else ssh -t "$NODE" 'docker system prune -f'; fi
       ;;
     *) die "unknown command: $cmd (try 'dctl help')" ;;
   esac
+}
+
+# ---------- entry point ----------
+main() {
+  set -euo pipefail
+
+  # Global flags consumed anywhere on the line: --no-color, --quiet/-q,
+  # --dry-run/-n, --all. Remaining args keep their order for command/target
+  # parsing.
+  local rest=() a
+  for a in "$@"; do
+    case "$a" in
+      --no-color) DCTL_NO_COLOR=1 ;;
+      --quiet|-q) DCTL_QUIET=1 ;;
+      --dry-run|-n) DCTL_DRY_RUN=1 ;;
+      --all) DCTL_ALL=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- "${rest[@]:-}"
+
+  local cmd="${1:-help}"; shift || true
+
+  # Commands that take no target run before any resolution.
+  case "$cmd" in
+    list|ls)   list_services; exit 0 ;;
+    validate|doctor) validate; exit $? ;;
+    edit)      edit_registry; exit $? ;;
+    self-update|selfupdate|upgrade) self_update; exit 0 ;;
+    help|-h|--help) usage; exit 0 ;;
+  esac
+
+  # globals consumed by resolve/run_compose/run_hook
+  NODE=""; PATH_=""; FILES=""; SVC=""
+
+  # Collect targets. --all selects every registered service; otherwise consume
+  # consecutive registered service names from the front. Anything left in "$@"
+  # after the names is passed through to docker compose.
+  local -a targets=()
+  if [[ -n "${DCTL_ALL:-}" ]]; then
+    local s
+    while IFS= read -r s; do [[ -n "$s" ]] && targets+=("$s"); done < <(list_services)
+    [[ ${#targets[@]} -gt 0 ]] || die "--all: no services in registry"
+  else
+    while [[ $# -gt 0 ]] && [[ -f "$REGISTRY" ]] && list_services 2>/dev/null | grep -qx "$1"; do
+      targets+=("$1"); shift
+    done
+  fi
+
+  # Single-target (or current-directory) mode: no registered names collected.
+  if [[ ${#targets[@]} -eq 0 ]]; then
+    local target=""
+    if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+      # unknown bare word for a target-taking command: let resolve() error clearly
+      if [[ "$cmd" =~ ^(up|down|restart|update|pull|logs|ps|exec|config|stats|pause|unpause|prune)$ ]] && [[ "$1" != *.* ]] && [[ ! -e "$1" ]]; then
+        target="$1"; shift
+      fi
+    fi
+    resolve "$target"
+    dispatch_command "$cmd" "$@"
+    exit $?
+  fi
+
+  # Single registered target: behave exactly like before.
+  if [[ ${#targets[@]} -eq 1 ]]; then
+    resolve "${targets[0]}"
+    dispatch_command "$cmd" "$@"
+    exit $?
+  fi
+
+  # Multi-service mode: run the command against each target in turn.
+  # exec/logs/config don't make sense across multiple services at once.
+  case "$cmd" in
+    exec|logs|config) die "'$cmd' works on a single service only" ;;
+  esac
+
+  DCTL_MULTI=1
+  local -a failed=()
+  local t
+  for t in "${targets[@]}"; do
+    info "=== $t ==="
+    # Subshell isolates die()/exit and the resolved globals so one failure
+    # doesn't abort the whole batch.
+    if ( resolve "$t"; dispatch_command "$cmd" "$@" ); then
+      :
+    else
+      failed+=("$t")
+    fi
+  done
+
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    err "failed: ${failed[*]}"
+    exit 1
+  fi
+  ok "all ${#targets[@]} service(s) done"
+  exit 0
 }
 
 # Run main only when executed directly, not when sourced (for tests).
