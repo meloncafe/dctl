@@ -12,6 +12,7 @@
 # for testing without running anything or altering the caller's shell options.
 
 REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
+DCTL_VERSION="0.5.0"
 
 # ---------- output ----------
 # Color is enabled unless: NO_COLOR is set, --no-color was passed (DCTL_NO_COLOR),
@@ -69,6 +70,40 @@ self_src_dir() {
   dirname "$self"
 }
 
+# Quietly check whether the upstream has commits we don't have, and how many.
+# Prints the count to stdout (empty if not determinable). Never errors, never
+# blocks for long, and stays silent on any failure (offline, no git, intranet
+# with no route to GitHub, not a checkout, etc.) so it's safe to call anywhere.
+# usage: behind="$(update_count)"
+update_count() {
+  local src_dir; src_dir="$(self_src_dir)"
+  [[ -d "$src_dir/.git" ]] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+
+  local branch upstream
+  branch="$(git -C "$src_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)" || return 0
+  upstream="origin/$branch"
+
+  # Short-timeout fetch so an unreachable remote (intranet/offline) fails fast
+  # and silently rather than hanging the command.
+  GIT_TERMINAL_PROMPT=0 timeout 5 \
+    git -C "$src_dir" fetch --quiet origin "$branch" >/dev/null 2>&1 || return 0
+
+  local count
+  count="$(git -C "$src_dir" rev-list --count "HEAD..$upstream" 2>/dev/null)" || return 0
+  [[ "$count" =~ ^[0-9]+$ ]] || return 0
+  printf '%s' "$count"
+}
+
+# Print the current version and, if reachable, whether an update is available.
+version() {
+  printf 'dctl %s\n' "$DCTL_VERSION"
+  local behind; behind="$(update_count)"
+  if [[ -n "$behind" && "$behind" != "0" ]]; then
+    info "an update is available ($behind commit(s) behind) — run 'dctl self-update'"
+  fi
+}
+
 # Pull the latest dctl from its repo and re-run install.sh.
 self_update() {
   local src_dir; src_dir="$(self_src_dir)"
@@ -89,7 +124,7 @@ self_update() {
     die "self-update: no upstream '$upstream'. reinstall via bootstrap."
   fi
   if [[ "$local_sha" == "$remote_sha" ]]; then
-    ok "dctl is already up to date."
+    ok "dctl $DCTL_VERSION is already up to date."
     return 0
   fi
 
@@ -286,9 +321,8 @@ edit_registry() {
 }
 
 usage() {
+  printf 'dctl %s — unified docker compose controller\n\n' "$DCTL_VERSION"
   cat <<'EOF'
-dctl — unified docker compose controller
-
 USAGE:
   dctl <command> [service...|--] [extra compose args...]
 
@@ -315,6 +349,7 @@ COMMANDS:
   list|ls        list registered services
   validate       check the registry (paths, compose files, ssh hosts)
   edit           edit the registry file
+  version        print the version (and check for an update if reachable)
   self-update    pull the latest dctl from its repo and re-run install.sh
   help           this help
 
@@ -420,6 +455,7 @@ main() {
     list|ls)   list_services; exit 0 ;;
     validate|doctor) validate; exit $? ;;
     edit)      edit_registry; exit $? ;;
+    version|--version|-v) version; exit 0 ;;
     self-update|selfupdate|upgrade) self_update; exit 0 ;;
     help|-h|--help) usage; exit 0 ;;
   esac
