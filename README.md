@@ -48,8 +48,9 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/dctl/main/install-public.sh
 
 Replace `<owner>` with the repo owner (or set `DCTL_REPO=<owner>/dctl`). This
 clones (or fast-forwards) the repo to `~/.local/share/dctl` over https and runs
-`install.sh`, which symlinks `dctl`, seeds the registry, and adds `~/.local/bin`
-to your PATH. Forked? `DCTL_REPO=youruser/dctl DCTL_REF=main curl -fsSL ... | bash`.
+`install.sh`, which symlinks `dctl`, seeds the registry, wires up shell
+completion, and adds `~/.local/bin` to your PATH. Forked?
+`DCTL_REPO=youruser/dctl DCTL_REF=main curl -fsSL ... | bash`.
 
 ### Private repo (via the gh CLI)
 
@@ -68,6 +69,7 @@ git clone https://github.com/<owner>/dctl.git ~/.local/share/dctl
 ### Update
 
 ```bash
+dctl version              # show the version, and whether an update is available
 dctl self-update          # pull latest + re-run install.sh
 ```
 
@@ -76,6 +78,11 @@ dctl self-update          # pull latest + re-run install.sh
 outside the repo and is never touched, overwritten, or committed. If a local
 change blocks the fast-forward, dctl explains how to recover instead of failing
 with a raw git error.
+
+`version` and `self-update` do a quick check for upstream commits. If the
+network is unreachable (offline, an intranet with no route to GitHub), the check
+is skipped silently — it never hangs or errors. Everyday commands do no network
+I/O.
 
 ## Registry
 
@@ -160,6 +167,7 @@ dctl up --all --dry-run      # preview the entire stack coming up
 | `prune` | `docker system prune -f` (respects target node) |
 | `list` / `edit` | list services / edit registry |
 | `validate` | check the registry (alias `doctor`) |
+| `version` | print the version (and check for an update if reachable) |
 | `self-update` | pull the latest dctl and re-run install.sh |
 
 ### Global flags
@@ -172,6 +180,20 @@ dctl up --all --dry-run      # preview the entire stack coming up
 | `--quiet`, `-q` | suppress info/ok/warn messages (errors still shown) |
 
 Flags may appear anywhere on the command line.
+
+## Shell completion
+
+`install.sh` sources `completion.bash` from your shell rc (`~/.bashrc` or
+`~/.zshrc`), so after the next install — or `self-update`, which re-runs
+`install.sh` — and a new shell, `<Tab>` completes commands and service names:
+
+```bash
+dctl re<Tab>             # -> restart
+dctl restart <Tab>       # -> web  db  api  worker   (registered service names)
+dctl --<Tab>             # -> --all  --dry-run  --no-color  --quiet
+```
+
+Service names come from your registry, so they stay in sync as you edit it.
 
 ## Validate the registry
 
