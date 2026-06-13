@@ -156,7 +156,7 @@ COMMANDS:
   pull           pull images only
   logs           follow logs            (TAIL=N to change tail count, default 20)
   ps             container status
-  exec           exec into a service container:  dctl exec vault vault status
+  exec           exec into a service container:  dctl exec db psql -U postgres
   config         render merged compose config
   stats          live resource usage
   pause|unpause  pause/resume containers
@@ -168,11 +168,11 @@ COMMANDS:
 
 EXAMPLES:
   dctl restart                  # current directory
-  dctl logs vault               # by service name
-  dctl exec vault vault status
-  dctl restart n8n              # remote if n8n.node is set
+  dctl logs web                 # by service name
+  dctl exec db psql -U postgres
+  dctl restart worker           # remote if worker.node is set
   dctl self-update              # upgrade dctl itself
-  TAIL=100 dctl logs traefik
+  TAIL=100 dctl logs api
 
 REGISTRY:
   services are defined in ~/.config/dctl/registry.conf (override: DCTL_REGISTRY)
