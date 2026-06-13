@@ -5,6 +5,38 @@ All notable changes to dctl are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.0] - 2026-06-13
+
+Reliability and testability pass. No breaking changes.
+
+### Fixed
+
+- **Remote argument quoting** — `run_compose`'s ssh path built the command with
+  a bare `"$*"`, so an argument like `sh -c "pg_dump | gzip"` split at the pipe
+  on the remote shell (the pipe became a separate remote command — a data-loss
+  risk), and spaces within an argument became separate words. Arguments and the
+  remote `cd` target are now serialized with `printf '%q'`. Local execution was
+  already correct and is unchanged.
+- Removed a no-op `TAIL=...` env assignment on the `restart` logs line
+  (shellcheck SC2097/SC2098); the trailing `${TAIL:-20}` already applied the
+  default, so behavior is unchanged.
+
+### Added
+
+- **Test suite (bats)** — unit tests for the registry parser (`get_field`,
+  `list_services`), target resolution (`resolve`), compose-file assembly, and
+  remote ssh argument serialization. 22 tests.
+- **CI** — GitHub Actions runs shellcheck and the bats suite on every push and
+  pull request.
+
+### Changed
+
+- **Internal refactor** — all logic moved into functions; `main()` runs only
+  when the script is executed directly (sourcing exposes functions for tests
+  without side effects). No change to the command-line behavior.
+
 ## [0.1.0] - 2026-06-13
 
 First public release.
@@ -42,4 +74,6 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/meloncafe/dctl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/meloncafe/dctl/releases/tag/v0.1.0
