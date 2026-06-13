@@ -12,7 +12,7 @@
 # for testing without running anything or altering the caller's shell options.
 
 REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
-DCTL_VERSION="0.5.0"
+DCTL_VERSION="0.5.1"
 
 # ---------- output ----------
 # Color is enabled unless: NO_COLOR is set, --no-color was passed (DCTL_NO_COLOR),
@@ -108,11 +108,14 @@ version() {
 self_update() {
   local src_dir; src_dir="$(self_src_dir)"
   [[ -d "$src_dir/.git" ]] || die "self-update: $src_dir is not a git checkout. reinstall via bootstrap."
-  info "updating dctl in $src_dir"
   # ignore exec-bit (chmod) changes so install.sh's chmod never blocks the pull
   git -C "$src_dir" config core.fileMode false
 
-  git -C "$src_dir" fetch --quiet origin || die "self-update: could not reach origin"
+  info "checking for updates…"
+  # --quiet plus discarding stderr keeps git's remote/transfer progress out of
+  # the output; we report the result ourselves below.
+  git -C "$src_dir" fetch --quiet origin >/dev/null 2>&1 \
+    || die "self-update: could not reach origin"
 
   local branch upstream local_sha remote_sha base
   branch="$(git -C "$src_dir" rev-parse --abbrev-ref HEAD)"
@@ -124,7 +127,7 @@ self_update() {
     die "self-update: no upstream '$upstream'. reinstall via bootstrap."
   fi
   if [[ "$local_sha" == "$remote_sha" ]]; then
-    ok "dctl $DCTL_VERSION is already up to date."
+    ok "already up to date (dctl $DCTL_VERSION)."
     return 0
   fi
 
@@ -139,8 +142,11 @@ self_update() {
   fi
 
   if [[ -n "$base" && "$base" == "$local_sha" ]]; then
-    # Fast-forward is safe: local is a strict ancestor of upstream.
-    git -C "$src_dir" merge --ff-only "$upstream" --quiet \
+    # Fast-forward is safe: local is a strict ancestor of upstream. Report how
+    # many commits we're applying instead of dumping git's diffstat.
+    local n; n="$(git -C "$src_dir" rev-list --count "HEAD..$upstream" 2>/dev/null || echo "")"
+    if [[ -n "$n" ]]; then info "applying $n new commit(s)…"; fi
+    git -C "$src_dir" merge --ff-only "$upstream" --quiet >/dev/null 2>&1 \
       || die "self-update: fast-forward failed unexpectedly"
   elif [[ -n "$base" && "$base" == "$remote_sha" ]]; then
     # Local has commits not on the remote.
@@ -159,8 +165,20 @@ self_update() {
     exit 1
   fi
 
-  [[ -f "$src_dir/install.sh" ]] && bash "$src_dir/install.sh"
-  ok "dctl is up to date."
+  # Re-run the installer quietly. Its routine output (symlink, registry,
+  # completion lines) is noise on an update; capture it and only reveal it if
+  # the installer fails.
+  if [[ -f "$src_dir/install.sh" ]]; then
+    local install_log; install_log="$(bash "$src_dir/install.sh" 2>&1)" || {
+      err "self-update: install.sh failed:"
+      printf '%s\n' "$install_log" >&2
+      exit 1
+    }
+  fi
+
+  # Read the new version straight from the updated script on disk.
+  local new_ver; new_ver="$(awk -F'"' '/^DCTL_VERSION=/ { print $2; exit }' "$src_dir/dctl" 2>/dev/null)"
+  ok "updated to dctl ${new_ver:-$DCTL_VERSION}."
 }
 
 # Resolve a target into NODE, PATH_, FILES, SVC (globals).
