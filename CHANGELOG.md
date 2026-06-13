@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-13
+
+Convenience pass. No breaking changes.
+
+### Added
+
+- **`validate`** (alias `doctor`) — sanity-checks the registry: every service
+  has a `path`, local paths and listed compose files exist, and `node` aliases
+  look defined in `~/.ssh/config`. Remote path/file existence is not checked
+  (would need an ssh round-trip). Exits non-zero if any problem is found.
+- **Color output and global flags** — `ok` / `warn` / `err` messages are
+  colored; color auto-disables when `NO_COLOR` is set, `--no-color` is passed,
+  or stderr is not a terminal. `--quiet` / `-q` silences info/ok/warn (errors
+  are always shown). Both flags may appear anywhere on the command line.
+
+### Changed
+
+- **`edit`** now tries `$EDITOR`, `$VISUAL`, `nano`, `vi`, `vim` in order, and
+  if none is available prints the registry path instead of failing silently.
+- **`self-update`** explains a failed fast-forward (local commits/changes) and
+  how to recover, instead of surfacing a raw git error.
+
 ## [0.2.0] - 2026-06-13
 
 Reliability and testability pass. No breaking changes.
@@ -74,6 +96,7 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/meloncafe/dctl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/meloncafe/dctl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/meloncafe/dctl/releases/tag/v0.1.0
