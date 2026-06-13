@@ -12,7 +12,7 @@
 # for testing without running anything or altering the caller's shell options.
 
 REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
-DCTL_VERSION="0.5.1"
+DCTL_VERSION="0.6.0"
 
 # ---------- output ----------
 # Color is enabled unless: NO_COLOR is set, --no-color was passed (DCTL_NO_COLOR),
@@ -35,16 +35,39 @@ ok()   { [[ -n "${DCTL_QUIET:-}" ]] && return 0; printf '%s %s\n' "$(_paint '32'
 expand_path() { local p="$1"; printf '%s' "${p/#\~/$HOME}"; }
 
 # Read a field from an [section] in the INI registry.
+#
+# Inline comments: a '#' is treated as the start of a comment only when it is
+# OUTSIDE quotes and preceded by whitespace. So a '#' inside quotes
+# (post_up = echo "#done"), attached to a word (a URL like http://x/y#frag), or
+# at the very start of a value is preserved; only a free-standing " # comment"
+# tail is stripped. Quote your value if you need a literal " #".
 # usage: get_field <service> <field>
 get_field() {
   local svc="$1" field="$2"
   [[ -f "$REGISTRY" ]] || die "registry not found: $REGISTRY (run 'dctl edit')"
   awk -v svc="[$svc]" -v field="$field" '
+    # strip an inline comment, honoring single/double quotes
+    function strip_comment(line,    i, n, c, p, inq, cut) {
+      n = length(line); inq = ""; cut = -1
+      for (i = 1; i <= n; i++) {
+        c = substr(line, i, 1)
+        if (inq != "") { if (c == inq) inq = "" }
+        else if (c == "\"" || c == "\x27") { inq = c }
+        else if (c == "#" && i > 1) {
+          p = substr(line, i - 1, 1)
+          if (p == " " || p == "\t") { cut = i; break }
+        }
+      }
+      if (cut > 0) line = substr(line, 1, cut - 1)
+      return line
+    }
     $0 == svc { found = 1; next }
     /^[[:space:]]*\[/ { found = 0 }
     found {
       line = $0
-      sub(/[[:space:]]*#.*$/, "", line)        # strip inline comments
+      # a whole-line comment (optionally indented) is skipped entirely
+      if (line ~ /^[[:space:]]*#/) next
+      line = strip_comment(line)
       idx = index(line, "=")
       if (idx > 0) {
         key = substr(line, 1, idx - 1)
@@ -215,8 +238,32 @@ validate() {
   [[ -f "$REGISTRY" ]] || die "registry not found: $REGISTRY (run 'dctl edit')"
   local svc node path_ files f problems=0 checked=0
   local ssh_config="$HOME/.ssh/config"
+
+  # B5: the registry may hold hook command strings (treated as trusted shell);
+  # warn if it's readable by group/others, since that can expose those commands.
+  local perms
+  perms="$(stat -c '%a' "$REGISTRY" 2>/dev/null || stat -f '%Lp' "$REGISTRY" 2>/dev/null || echo "")"
+  if [[ -n "$perms" && "${perms: -2}" != "00" ]]; then
+    warn "registry is readable by group/other ($perms): chmod 600 $REGISTRY"
+  fi
+
+  # B3: flag duplicate section names (only the first wins; silent shadowing is
+  # a debugging trap).
+  local dups
+  dups="$(list_services | sort | uniq -d)"
+  if [[ -n "$dups" ]]; then
+    while IFS= read -r d; do
+      [[ -n "$d" ]] && err "duplicate service section: [$d] (only the first is used)"
+    done <<< "$dups"
+    problems=$((problems + 1))
+  fi
+
+  local seen=""
   while IFS= read -r svc; do
     [[ -n "$svc" ]] || continue
+    # skip a duplicate section we've already validated (it was flagged above)
+    case " $seen " in *" $svc "*) continue ;; esac
+    seen="$seen $svc"
     checked=$((checked + 1))
     node="$(get_field "$svc" node)"
     path_="$(get_field "$svc" path)"
@@ -450,6 +497,12 @@ dispatch_command() {
 # ---------- entry point ----------
 main() {
   set -euo pipefail
+
+  # B4: TAIL feeds `--tail` for logs/restart; reject a non-numeric value early
+  # with a clear message instead of letting docker error out cryptically.
+  if [[ -n "${TAIL:-}" && ! "${TAIL}" =~ ^[0-9]+$ ]]; then
+    die "TAIL must be a non-negative integer (got: '$TAIL')"
+  fi
 
   # Global flags consumed anywhere on the line: --no-color, --quiet/-q,
   # --dry-run/-n, --all. Remaining args keep their order for command/target
