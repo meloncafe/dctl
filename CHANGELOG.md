@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-13
+
+Feature expansion. No breaking changes.
+
+### Added
+
+- **Multi-service commands** — pass several service names
+  (`dctl restart web db api`) or `--all` to act on every registered service.
+  Services run in turn; one failure neither aborts the batch nor leaks state
+  (each runs in an isolated subshell), and a summary reports any failures with
+  a non-zero exit. `exec`, `logs`, and `config` remain single-service.
+- **`--dry-run` / `-n`** — print the compose plan and hooks (location, files,
+  arguments) without executing anything, `prune` included. Combines with
+  multi-service to preview a whole batch.
+
+### Changed
+
+- Command execution was extracted into `dispatch_command()` so it can run
+  per-service. Single-service and current-directory behavior is unchanged.
+- Multi-service `restart` skips the trailing `logs -f` (following the first
+  service's logs would block the rest); single-service `restart` still follows.
+
 ## [0.3.0] - 2026-06-13
 
 Convenience pass. No breaking changes.
@@ -96,7 +118,8 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/meloncafe/dctl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/meloncafe/dctl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/meloncafe/dctl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/meloncafe/dctl/releases/tag/v0.1.0
