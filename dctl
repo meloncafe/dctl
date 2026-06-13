@@ -13,9 +13,23 @@
 
 REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
 
-# ---------- helpers ----------
-die() { printf 'dctl: %s\n' "$*" >&2; exit 1; }
-info() { printf '\033[36mdctl:\033[0m %s\n' "$*" >&2; }
+# ---------- output ----------
+# Color is enabled unless: NO_COLOR is set, --no-color was passed (DCTL_NO_COLOR),
+# or stderr is not a terminal. --quiet (DCTL_QUIET) silences info/ok/warn, not errors.
+_color() {
+  [[ -n "${NO_COLOR:-}" || -n "${DCTL_NO_COLOR:-}" ]] && return 1
+  [[ -t 2 ]] || return 1
+  return 0
+}
+_paint() { # <color-code> <text>
+  if _color; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi
+}
+
+die()  { printf '%s %s\n' "$(_paint '1;31' 'dctl:')" "$*" >&2; exit 1; }
+err()  { printf '%s %s\n' "$(_paint '1;31' 'dctl:')" "$*" >&2; }
+warn() { [[ -n "${DCTL_QUIET:-}" ]] && return 0; printf '%s %s\n' "$(_paint '33' 'dctl:')" "$*" >&2; }
+info() { [[ -n "${DCTL_QUIET:-}" ]] && return 0; printf '%s %s\n' "$(_paint '36' 'dctl:')" "$*" >&2; }
+ok()   { [[ -n "${DCTL_QUIET:-}" ]] && return 0; printf '%s %s\n' "$(_paint '32' 'dctl:')" "$*" >&2; }
 
 expand_path() { local p="$1"; printf '%s' "${p/#\~/$HOME}"; }
 
@@ -62,9 +76,14 @@ self_update() {
   info "updating dctl in $src_dir"
   # ignore exec-bit (chmod) changes so install.sh's chmod never blocks the pull
   git -C "$src_dir" config core.fileMode false
-  git -C "$src_dir" pull --ff-only
+  if ! git -C "$src_dir" pull --ff-only; then
+    err "self-update: fast-forward failed — you have local commits or changes in $src_dir."
+    err "  inspect: git -C $src_dir status"
+    err "  then:    git -C $src_dir stash   (or commit/reset) and retry 'dctl self-update'"
+    exit 1
+  fi
   [[ -f "$src_dir/install.sh" ]] && bash "$src_dir/install.sh"
-  info "dctl is up to date."
+  ok "dctl is up to date."
 }
 
 # Resolve a target into NODE, PATH_, FILES, SVC (globals).
@@ -91,6 +110,62 @@ compose_fargs() {
   local f
   for f in $files; do out="$out -f $f"; done
   printf '%s' "$out"
+}
+
+# Validate the registry: every service has a path, local paths exist, listed
+# compose files exist (local only), and any node looks defined in ~/.ssh/config.
+# Remote paths/files are not checked by default (would require an ssh round-trip).
+# Returns non-zero if any problem is found.
+validate() {
+  [[ -f "$REGISTRY" ]] || die "registry not found: $REGISTRY (run 'dctl edit')"
+  local svc node path_ files f problems=0 checked=0
+  local ssh_config="$HOME/.ssh/config"
+  while IFS= read -r svc; do
+    [[ -n "$svc" ]] || continue
+    checked=$((checked + 1))
+    node="$(get_field "$svc" node)"
+    path_="$(get_field "$svc" path)"
+    files="$(get_field "$svc" files)"
+
+    if [[ -z "$path_" ]]; then
+      err "[$svc] missing required 'path'"
+      problems=$((problems + 1))
+      continue
+    fi
+
+    if [[ -n "$node" ]]; then
+      # remote: only sanity-check the ssh host alias, skip path/file existence
+      if [[ -f "$ssh_config" ]] && ! grep -qiE "^[[:space:]]*Host([[:space:]]|=).*\b${node}\b" "$ssh_config"; then
+        warn "[$svc] node '$node' not found as a Host in $ssh_config"
+      fi
+      ok "[$svc] remote on '$node' (path/files not checked)"
+      continue
+    fi
+
+    # local checks
+    local lpath; lpath="$(expand_path "$path_")"
+    if [[ ! -d "$lpath" ]]; then
+      err "[$svc] path does not exist: $lpath"
+      problems=$((problems + 1))
+      continue
+    fi
+    local missing=0
+    for f in $files; do
+      [[ -f "$lpath/$f" ]] || { err "[$svc] compose file not found: $lpath/$f"; missing=$((missing + 1)); }
+    done
+    if [[ "$missing" -gt 0 ]]; then
+      problems=$((problems + missing))
+    else
+      ok "[$svc] ok"
+    fi
+  done < <(list_services)
+
+  if [[ "$problems" -gt 0 ]]; then
+    err "validate: $problems problem(s) across $checked service(s)"
+    return 1
+  fi
+  ok "validate: $checked service(s) ok"
+  return 0
 }
 
 # Run a docker compose invocation locally or over ssh.
@@ -142,6 +217,22 @@ run_hook() {
   fi
 }
 
+# Open the registry in an editor, trying a sensible fallback chain.
+edit_registry() {
+  mkdir -p "$(dirname "$REGISTRY")"
+  local ed
+  for ed in "${EDITOR:-}" "${VISUAL:-}" nano vi vim; do
+    [[ -n "$ed" ]] || continue
+    if command -v "${ed%% *}" >/dev/null 2>&1; then
+      "$ed" "$REGISTRY"
+      return $?
+    fi
+  done
+  err "no editor found (tried \$EDITOR, \$VISUAL, nano, vi, vim)."
+  err "edit it directly: $REGISTRY"
+  return 1
+}
+
 usage() {
   cat <<'EOF'
 dctl — unified docker compose controller
@@ -168,15 +259,21 @@ COMMANDS:
   pause|unpause  pause/resume containers
   prune          docker system prune -f  (respects target node)
   list|ls        list registered services
+  validate       check the registry (paths, compose files, ssh hosts)
   edit           edit the registry file
   self-update    pull the latest dctl from its repo and re-run install.sh
   help           this help
+
+GLOBAL FLAGS:
+  --no-color     disable colored output (also respects NO_COLOR)
+  --quiet, -q    suppress info/ok/warn messages (errors still shown)
 
 EXAMPLES:
   dctl restart                  # current directory
   dctl logs web                 # by service name
   dctl exec db psql -U postgres
   dctl restart worker           # remote if worker.node is set
+  dctl validate                 # sanity-check the registry
   dctl self-update              # upgrade dctl itself
   TAIL=100 dctl logs api
 
@@ -190,6 +287,18 @@ EOF
 # ---------- entry point ----------
 main() {
   set -euo pipefail
+
+  # Global flags consumed anywhere on the line: --no-color, --quiet/-q.
+  # Remaining args keep their order for command/target parsing.
+  local rest=() a
+  for a in "$@"; do
+    case "$a" in
+      --no-color) DCTL_NO_COLOR=1 ;;
+      --quiet|-q) DCTL_QUIET=1 ;;
+      *) rest+=("$a") ;;
+    esac
+  done
+  set -- "${rest[@]:-}"
 
   local cmd="${1:-help}"; shift || true
 
@@ -211,7 +320,8 @@ main() {
 
   case "$cmd" in
     list|ls)   list_services; exit 0 ;;
-    edit)      mkdir -p "$(dirname "$REGISTRY")"; "${EDITOR:-vi}" "$REGISTRY"; exit 0 ;;
+    validate|doctor) validate; exit $? ;;
+    edit)      edit_registry; exit $? ;;
     self-update|selfupdate|upgrade) self_update; exit 0 ;;
     help|-h|--help) usage; exit 0 ;;
   esac
