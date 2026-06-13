@@ -49,4 +49,23 @@ add_path_to_rc() {
 }
 add_path_to_rc
 
+# --- wire up shell completion (idempotent) ---
+add_completion_to_rc() {
+  local comp="$SRC_DIR/completion.bash"
+  [[ -f "$comp" ]] || return 0
+  local rc
+  case "$(basename "${SHELL:-/bin/bash}")" in
+    zsh)  rc="$HOME/.zshrc" ;;
+    *)    rc="$HOME/.bashrc" ;;
+  esac
+  local line="[ -f \"$comp\" ] && source \"$comp\""
+  if [[ -f "$rc" ]] && grep -qF "$comp" "$rc"; then
+    echo "completion already sourced in $rc"
+  else
+    printf '\n# dctl shell completion\n%s\n' "$line" >> "$rc"
+    echo "added completion to $rc  (restart shell or: source $rc)"
+  fi
+}
+add_completion_to_rc
+
 echo "done. try: dctl help"

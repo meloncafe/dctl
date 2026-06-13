@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-13
+
+Feature pass. No breaking changes.
+
+### Added
+
+- **`version` command** (aliases `--version` / `-v`) — prints the dctl version,
+  which is now also shown in the `help` header. The version is a constant in
+  the script, so it prints instantly with no git or network access.
+- **Quiet update check** — `version` and `self-update` do a short-timeout
+  `git fetch` and report how many commits the upstream is ahead. It runs only
+  for those two commands, so everyday commands (`logs`, `restart`, …) do no
+  network I/O. The check stays completely silent on any failure — offline, an
+  intranet with no route to GitHub, no git, or not a checkout — so it never
+  hangs or adds noise.
+- **Shell completion** (`completion.bash`, bash + zsh) — completes subcommands,
+  global flags, and registered service names (`dctl <Tab>`, `dctl restart
+  <Tab>`). `install.sh` now sources it from your shell rc (idempotent), so it
+  activates after the next `install.sh` run (e.g. via `self-update`) and a new
+  shell.
+
 ## [0.4.1] - 2026-06-13
 
 Patch. No breaking changes.
@@ -134,7 +155,8 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/meloncafe/dctl/releases/tag/v0.5.0
 [0.4.1]: https://github.com/meloncafe/dctl/releases/tag/v0.4.1
 [0.4.0]: https://github.com/meloncafe/dctl/releases/tag/v0.4.0
 [0.3.0]: https://github.com/meloncafe/dctl/releases/tag/v0.3.0
