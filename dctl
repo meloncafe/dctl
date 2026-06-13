@@ -102,8 +102,12 @@ run_compose() {
       # shellcheck disable=SC2086
       docker compose $fargs "$@" )
   else
+    # Quote each argument so quotes/pipes/spaces survive the remote shell
+    # (a naive "$*" would let e.g. `sh -c "a | b"` split at the pipe remotely).
+    local q="" a
+    for a in "$@"; do q+=" $(printf '%q' "$a")"; done
     # shellcheck disable=SC2029
-    ssh -t "$NODE" "cd '$PATH_' && docker compose $fargs $*"
+    ssh -t "$NODE" "cd $(printf '%q' "$PATH_") && docker compose$fargs$q"
   fi
 }
 
@@ -134,7 +138,7 @@ run_hook() {
   if [[ -z "$NODE" ]]; then
     ( cd "$PATH_" 2>/dev/null || die "no such directory: $PATH_"; eval "$hook" )
   else
-    ssh -t "$NODE" "cd '$PATH_' && $hook"
+    ssh -t "$NODE" "cd $(printf '%q' "$PATH_") && $hook"
   fi
 }
 
