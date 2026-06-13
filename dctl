@@ -6,8 +6,10 @@
 # hooks and multiple compose files.
 #
 # Registry: ~/.config/dctl/registry.conf  (override with DCTL_REGISTRY)
-
-set -euo pipefail
+#
+# Structure: all logic lives in functions; main() is invoked only when this
+# file is executed directly (not when sourced). Sourcing exposes the functions
+# for testing without running anything or altering the caller's shell options.
 
 REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
 
@@ -65,7 +67,7 @@ self_update() {
   info "dctl is up to date."
 }
 
-# Resolve a target into NODE, PATH_, FILES, then export.
+# Resolve a target into NODE, PATH_, FILES, SVC (globals).
 # Empty service => current directory, no registered files/hooks.
 resolve() {
   local svc="${1:-}"
@@ -181,69 +183,79 @@ REGISTRY:
 EOF
 }
 
-# ---------- argument parsing ----------
-cmd="${1:-help}"; shift || true
+# ---------- entry point ----------
+main() {
+  set -euo pipefail
 
-# A leading non-flag arg is treated as the service/target.
-target=""
-if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
-  # but for exec/logs/ps the first arg may be a service OR a compose passthrough;
-  # we still treat it as service if it matches a registered name, else cwd.
-  if [[ -f "$REGISTRY" ]] && list_services 2>/dev/null | grep -qx "$1"; then
-    target="$1"; shift
-  elif [[ "$cmd" =~ ^(up|down|restart|update|pull|logs|ps|exec|config|stats|pause|unpause|prune)$ ]] && [[ -z "${target}" ]] && [[ "$1" != *.* ]] && [[ ! -e "$1" ]]; then
-    # unknown bare word for a target-taking command: let resolve() error clearly
-    target="$1"; shift
+  local cmd="${1:-help}"; shift || true
+
+  # A leading non-flag arg is treated as the service/target.
+  local target=""
+  if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+    # for exec/logs/ps the first arg may be a service OR a compose passthrough;
+    # treat it as a service if it matches a registered name, else as cwd.
+    if [[ -f "$REGISTRY" ]] && list_services 2>/dev/null | grep -qx "$1"; then
+      target="$1"; shift
+    elif [[ "$cmd" =~ ^(up|down|restart|update|pull|logs|ps|exec|config|stats|pause|unpause|prune)$ ]] && [[ -z "${target}" ]] && [[ "$1" != *.* ]] && [[ ! -e "$1" ]]; then
+      # unknown bare word for a target-taking command: let resolve() error clearly
+      target="$1"; shift
+    fi
   fi
+
+  # globals consumed by resolve/run_compose/run_hook
+  NODE=""; PATH_=""; FILES=""; SVC=""
+
+  case "$cmd" in
+    list|ls)   list_services; exit 0 ;;
+    edit)      mkdir -p "$(dirname "$REGISTRY")"; "${EDITOR:-vi}" "$REGISTRY"; exit 0 ;;
+    self-update|selfupdate|upgrade) self_update; exit 0 ;;
+    help|-h|--help) usage; exit 0 ;;
+  esac
+
+  resolve "$target"
+
+  case "$cmd" in
+    up)
+      run_hook pre_up
+      compose_up "$@"
+      run_hook post_up
+      ;;
+    down)
+      run_hook pre_down
+      run_compose down "$@"
+      run_hook post_down
+      ;;
+    restart)
+      run_hook pre_down
+      run_compose down --remove-orphans
+      run_hook pre_up
+      run_compose pull
+      compose_up
+      run_hook post_up
+      run_compose logs --tail "${TAIL:-20}" -f
+      ;;
+    update)
+      run_hook pre_up
+      run_compose pull
+      compose_up "$@"
+      run_hook post_up
+      ;;
+    pull)      run_compose pull "$@" ;;
+    logs)      run_compose logs --tail "${TAIL:-20}" -f "$@" ;;
+    ps)        run_compose ps "$@" ;;
+    exec)      run_compose exec "$@" ;;
+    config)    run_compose config "$@" ;;
+    stats)     run_compose stats "$@" ;;
+    pause)     run_compose pause "$@" ;;
+    unpause)   run_compose unpause "$@" ;;
+    prune)
+      if [[ -z "$NODE" ]]; then docker system prune -f; else ssh -t "$NODE" 'docker system prune -f'; fi
+      ;;
+    *) die "unknown command: $cmd (try 'dctl help')" ;;
+  esac
+}
+
+# Run main only when executed directly, not when sourced (for tests).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
 fi
-
-NODE=""; PATH_=""; FILES=""; SVC=""
-
-case "$cmd" in
-  list|ls)   list_services; exit 0 ;;
-  edit)      mkdir -p "$(dirname "$REGISTRY")"; "${EDITOR:-vi}" "$REGISTRY"; exit 0 ;;
-  self-update|selfupdate|upgrade) self_update; exit 0 ;;
-  help|-h|--help) usage; exit 0 ;;
-esac
-
-resolve "$target"
-
-case "$cmd" in
-  up)
-    run_hook pre_up
-    compose_up "$@"
-    run_hook post_up
-    ;;
-  down)
-    run_hook pre_down
-    run_compose down "$@"
-    run_hook post_down
-    ;;
-  restart)
-    run_hook pre_down
-    run_compose down --remove-orphans
-    run_hook pre_up
-    run_compose pull
-    compose_up
-    run_hook post_up
-    TAIL="${TAIL:-20}" run_compose logs --tail "${TAIL:-20}" -f
-    ;;
-  update)
-    run_hook pre_up
-    run_compose pull
-    compose_up "$@"
-    run_hook post_up
-    ;;
-  pull)      run_compose pull "$@" ;;
-  logs)      run_compose logs --tail "${TAIL:-20}" -f "$@" ;;
-  ps)        run_compose ps "$@" ;;
-  exec)      run_compose exec "$@" ;;
-  config)    run_compose config "$@" ;;
-  stats)     run_compose stats "$@" ;;
-  pause)     run_compose pause "$@" ;;
-  unpause)   run_compose unpause "$@" ;;
-  prune)
-    if [[ -z "$NODE" ]]; then docker system prune -f; else ssh -t "$NODE" 'docker system prune -f'; fi
-    ;;
-  *) die "unknown command: $cmd (try 'dctl help')" ;;
-esac
