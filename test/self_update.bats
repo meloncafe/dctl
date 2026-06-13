@@ -55,7 +55,8 @@ _advance_upstream() {
   _advance_upstream
   run self_update
   [ "$status" -eq 0 ]
-  [[ "$output" == *"up to date"* ]]
+  [[ "$output" == *"updated to dctl"* ]]
+  [[ "$output" == *"applying"* ]]
   # node should now match upstream
   [ "$(git -C "$NODE_DIR" rev-parse HEAD)" = "$(git -C "$NODE_DIR" rev-parse origin/main)" ]
 }
@@ -87,4 +88,15 @@ _advance_upstream() {
   [[ "$output" == *"diverged"* ]]
   [[ "$output" == *"reset --hard origin/main"* ]]
   [[ "$output" == *"registry"* ]]
+}
+
+@test "self_update surfaces install.sh failure" {
+  # make the upstream installer fail
+  printf '#!/usr/bin/env bash\necho "boom" >&2\nexit 3\n' > "$WORK/up/install.sh"
+  git -C "$WORK/up" commit -qam "breaking installer"
+  git -C "$WORK/up" push -q origin main
+  run self_update
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"install.sh failed"* ]]
+  [[ "$output" == *"boom"* ]]
 }

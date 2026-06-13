@@ -1,5 +1,8 @@
 # dctl
 
+[![CI](https://github.com/meloncafe/dctl/actions/workflows/ci.yml/badge.svg)](https://github.com/meloncafe/dctl/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Unified `docker compose` controller. Resolve services **by name** from a central
 registry, drive them from the **current directory** or **by name**, and reach
 **remote nodes over ssh** — with **per-service hooks**, **multi compose-file**
@@ -75,9 +78,10 @@ dctl self-update          # pull latest + re-run install.sh
 
 `self-update` only updates the dctl scripts (it `git pull`s the checkout in
 `~/.local/share/dctl`). Your registry at `~/.config/dctl/registry.conf` lives
-outside the repo and is never touched, overwritten, or committed. If a local
-change blocks the fast-forward, dctl explains how to recover instead of failing
-with a raw git error.
+outside the repo and is never touched, overwritten, or committed. It prints a
+short progress summary (commits applied, the new version) rather than raw git
+output. If a local change blocks the fast-forward, dctl explains how to recover
+instead of failing with a raw git error.
 
 `version` and `self-update` do a quick check for upstream commits. If the
 network is unreachable (offline, an intranet with no route to GitHub), the check

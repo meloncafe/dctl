@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-13
+
+Patch. No breaking changes.
+
+### Changed
+
+- **`self-update` output is now a short progress summary** instead of git's raw
+  fetch/merge log. It prints `checking for updates…`, `applying N new
+  commit(s)…`, and `updated to dctl <version>` — no object counting, no
+  `From github.com…` line, no fast-forward diffstat, and none of `install.sh`'s
+  routine output. The installer's output is captured and shown only if it
+  fails. `already up to date` stays a one-liner with the version.
+
 ## [0.5.0] - 2026-06-13
 
 Feature pass. No breaking changes.
@@ -155,7 +168,8 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/meloncafe/dctl/releases/tag/v0.5.1
 [0.5.0]: https://github.com/meloncafe/dctl/releases/tag/v0.5.0
 [0.4.1]: https://github.com/meloncafe/dctl/releases/tag/v0.4.1
 [0.4.0]: https://github.com/meloncafe/dctl/releases/tag/v0.4.0
