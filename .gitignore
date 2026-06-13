@@ -1,0 +1,4 @@
+# Per-node registry is never committed — each node owns its own.
+registry.conf
+.config/
+*.local

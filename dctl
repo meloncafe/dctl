@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# dctl — unified docker compose controller
+#
+# Resolve services by name from a central registry, control them in the current
+# directory, by service name, or on a remote node over ssh. Supports per-service
+# hooks and multiple compose files.
+#
+# Registry: ~/.config/dctl/registry.conf  (override with DCTL_REGISTRY)
+
+set -euo pipefail
+
+REGISTRY="${DCTL_REGISTRY:-$HOME/.config/dctl/registry.conf}"
+
+# ---------- helpers ----------
+die() { printf 'dctl: %s\n' "$*" >&2; exit 1; }
+info() { printf '\033[36mdctl:\033[0m %s\n' "$*" >&2; }
+
+expand_path() { local p="$1"; printf '%s' "${p/#\~/$HOME}"; }
+
+# Read a field from an [section] in the INI registry.
+# usage: get_field <service> <field>
+get_field() {
+  local svc="$1" field="$2"
+  [[ -f "$REGISTRY" ]] || die "registry not found: $REGISTRY (run 'dctl edit')"
+  awk -v svc="[$svc]" -v field="$field" '
+    $0 == svc { found = 1; next }
+    /^[[:space:]]*\[/ { found = 0 }
+    found {
+      line = $0
+      sub(/[[:space:]]*#.*$/, "", line)        # strip inline comments
+      idx = index(line, "=")
+      if (idx > 0) {
+        key = substr(line, 1, idx - 1)
+        val = substr(line, idx + 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", key)
+        gsub(/^[ \t]+|[ \t]+$/, "", val)
+        if (key == field) { print val; exit }
+      }
+    }
+  ' "$REGISTRY"
+}
+
+# List all service section names in the registry.
+list_services() {
+  [[ -f "$REGISTRY" ]] || die "registry not found: $REGISTRY"
+  awk '/^[[:space:]]*\[/ { gsub(/[][]/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print }' "$REGISTRY"
+}
+
+# Locate the git checkout that backs this script (follows the symlink).
+self_src_dir() {
+  local self
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || printf '%s' "${BASH_SOURCE[0]}")"
+  dirname "$self"
+}
+
+# Pull the latest dctl from its repo and re-run install.sh.
+self_update() {
+  local src_dir; src_dir="$(self_src_dir)"
+  [[ -d "$src_dir/.git" ]] || die "self-update: $src_dir is not a git checkout. reinstall via bootstrap."
+  info "updating dctl in $src_dir"
+  # ignore exec-bit (chmod) changes so install.sh's chmod never blocks the pull
+  git -C "$src_dir" config core.fileMode false
+  git -C "$src_dir" pull --ff-only
+  [[ -f "$src_dir/install.sh" ]] && bash "$src_dir/install.sh"
+  info "dctl is up to date."
+}
+
+# Resolve a target into NODE, PATH_, FILES, then export.
+# Empty service => current directory, no registered files/hooks.
+resolve() {
+  local svc="${1:-}"
+  if [[ -z "$svc" ]]; then
+    NODE=""; PATH_="$PWD"; FILES=""; SVC=""
+    return
+  fi
+  list_services | grep -qx "$svc" || die "unknown service: $svc (try 'dctl list')"
+  SVC="$svc"
+  NODE="$(get_field "$svc" node)"
+  local p; p="$(get_field "$svc" path)"
+  [[ -n "$p" ]] || die "service '$svc' has no 'path' in registry"
+  # only expand ~ for local paths; remote paths are expanded on the remote shell
+  if [[ -z "$NODE" ]]; then PATH_="$(expand_path "$p")"; else PATH_="$p"; fi
+  FILES="$(get_field "$svc" files)"
+}
+
+# Build the -f args from a space-separated file list.
+compose_fargs() {
+  local files="$1" out=""
+  local f
+  for f in $files; do out="$out -f $f"; done
+  printf '%s' "$out"
+}
+
+# Run a docker compose invocation locally or over ssh.
+# usage: run_compose <compose-args...>
+run_compose() {
+  local fargs; fargs="$(compose_fargs "$FILES")"
+  if [[ -z "$NODE" ]]; then
+    ( cd "$PATH_" 2>/dev/null || die "no such directory: $PATH_"
+      # shellcheck disable=SC2086
+      docker compose $fargs "$@" )
+  else
+    # shellcheck disable=SC2029
+    ssh -t "$NODE" "cd '$PATH_' && docker compose $fargs $*"
+  fi
+}
+
+# `up -d` that cleans up after itself on failure.
+#
+# A failed `up` (e.g. a port still bound, an image pull error) can leave the
+# project's network and partial containers behind. Re-running `up` then either
+# succeeds non-deterministically against that leftover state, or starts the
+# container with a different/empty config. To keep state deterministic, on any
+# up failure we tear the project back down (incl. orphans) and exit non-zero so
+# the failure is loud, not silently half-applied.
+compose_up() {
+  if run_compose up -d "$@"; then
+    return 0
+  fi
+  info "up failed — rolling back partial state (down --remove-orphans)"
+  run_compose down --remove-orphans >/dev/null 2>&1 || true
+  die "compose up failed; partial resources removed. fix the error above and retry."
+}
+
+# Run a registered hook (a shell command string) in the service context.
+# usage: run_hook <hook-field>
+run_hook() {
+  [[ -n "$SVC" ]] || return 0
+  local hook; hook="$(get_field "$SVC" "$1")"
+  [[ -n "$hook" ]] || return 0
+  info "hook ($1): $hook"
+  if [[ -z "$NODE" ]]; then
+    ( cd "$PATH_" 2>/dev/null || die "no such directory: $PATH_"; eval "$hook" )
+  else
+    ssh -t "$NODE" "cd '$PATH_' && $hook"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+dctl — unified docker compose controller
+
+USAGE:
+  dctl <command> [service|--] [extra compose args...]
+
+TARGET RESOLUTION:
+  (omitted)      operate on the compose project in the current directory
+  <service>      look up path/node/files/hooks from the registry
+  remote nodes   set 'node = <ssh-host>' under the service section in registry
+
+COMMANDS:
+  up             start    (pre_up  -> up -d            -> post_up)   rolls back on failure
+  down           stop     (pre_down-> down             -> post_down)
+  restart        full cycle (pre_down-> down --remove-orphans -> pre_up -> pull -> up -d -> post_up -> logs)
+  update         no-downtime refresh (pre_up -> pull -> up -d -> post_up)   rolls back on failure
+  pull           pull images only
+  logs           follow logs            (TAIL=N to change tail count, default 20)
+  ps             container status
+  exec           exec into a service container:  dctl exec vault vault status
+  config         render merged compose config
+  stats          live resource usage
+  pause|unpause  pause/resume containers
+  prune          docker system prune -f  (respects target node)
+  list|ls        list registered services
+  edit           edit the registry file
+  self-update    pull the latest dctl from its repo and re-run install.sh
+  help           this help
+
+EXAMPLES:
+  dctl restart                  # current directory
+  dctl logs vault               # by service name
+  dctl exec vault vault status
+  dctl restart n8n              # remote if n8n.node is set
+  dctl self-update              # upgrade dctl itself
+  TAIL=100 dctl logs traefik
+
+REGISTRY:
+  services are defined in ~/.config/dctl/registry.conf (override: DCTL_REGISTRY)
+  list registered services:  dctl list
+  edit the registry:         dctl edit
+EOF
+}
+
+# ---------- argument parsing ----------
+cmd="${1:-help}"; shift || true
+
+# A leading non-flag arg is treated as the service/target.
+target=""
+if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+  # but for exec/logs/ps the first arg may be a service OR a compose passthrough;
+  # we still treat it as service if it matches a registered name, else cwd.
+  if [[ -f "$REGISTRY" ]] && list_services 2>/dev/null | grep -qx "$1"; then
+    target="$1"; shift
+  elif [[ "$cmd" =~ ^(up|down|restart|update|pull|logs|ps|exec|config|stats|pause|unpause|prune)$ ]] && [[ -z "${target}" ]] && [[ "$1" != *.* ]] && [[ ! -e "$1" ]]; then
+    # unknown bare word for a target-taking command: let resolve() error clearly
+    target="$1"; shift
+  fi
+fi
+
+NODE=""; PATH_=""; FILES=""; SVC=""
+
+case "$cmd" in
+  list|ls)   list_services; exit 0 ;;
+  edit)      mkdir -p "$(dirname "$REGISTRY")"; "${EDITOR:-vi}" "$REGISTRY"; exit 0 ;;
+  self-update|selfupdate|upgrade) self_update; exit 0 ;;
+  help|-h|--help) usage; exit 0 ;;
+esac
+
+resolve "$target"
+
+case "$cmd" in
+  up)
+    run_hook pre_up
+    compose_up "$@"
+    run_hook post_up
+    ;;
+  down)
+    run_hook pre_down
+    run_compose down "$@"
+    run_hook post_down
+    ;;
+  restart)
+    run_hook pre_down
+    run_compose down --remove-orphans
+    run_hook pre_up
+    run_compose pull
+    compose_up
+    run_hook post_up
+    TAIL="${TAIL:-20}" run_compose logs --tail "${TAIL:-20}" -f
+    ;;
+  update)
+    run_hook pre_up
+    run_compose pull
+    compose_up "$@"
+    run_hook post_up
+    ;;
+  pull)      run_compose pull "$@" ;;
+  logs)      run_compose logs --tail "${TAIL:-20}" -f "$@" ;;
+  ps)        run_compose ps "$@" ;;
+  exec)      run_compose exec "$@" ;;
+  config)    run_compose config "$@" ;;
+  stats)     run_compose stats "$@" ;;
+  pause)     run_compose pause "$@" ;;
+  unpause)   run_compose unpause "$@" ;;
+  prune)
+    if [[ -z "$NODE" ]]; then docker system prune -f; else ssh -t "$NODE" 'docker system prune -f'; fi
+    ;;
+  *) die "unknown command: $cmd (try 'dctl help')" ;;
+esac
