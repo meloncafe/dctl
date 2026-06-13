@@ -13,8 +13,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - name: Lint dctl (bash)
-        run: shellcheck -s bash dctl
+      - name: Lint dctl and completion (bash)
+        run: shellcheck -s bash dctl completion.bash
       - name: Lint shell scripts
         run: shellcheck bootstrap.sh install.sh install-public.sh
 

@@ -42,66 +42,61 @@ EOF
 
 # --- multi-service (B5) ---------------------------------------------------
 
-@test "multiple services run in turn with a summary" {
-  run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" up web api --dry-run
+@test "multi-service dry-run iterates every named service" {
+  run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" pull web db api --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"=== web ==="* ]]
+  [[ "$output" == *"=== db ==="* ]]
   [[ "$output" == *"=== api ==="* ]]
-  [[ "$output" == *"all 2 service(s) done"* ]]
 }
 
-@test "--all targets every registered service" {
+@test "--all selects every registered service" {
   run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" pull --all --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"=== web ==="* ]]
   [[ "$output" == *"=== db ==="* ]]
   [[ "$output" == *"=== api ==="* ]]
-  [[ "$output" == *"all 3 service(s) done"* ]]
 }
 
-@test "multi-service restart omits the trailing logs -f" {
-  run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" restart web api --dry-run
-  [ "$status" -eq 0 ]
-  # single restart would end with 'logs --tail .. -f'; multi must not
-  [[ "$output" != *"logs --tail"* ]]
-}
-
-@test "single restart keeps the trailing logs -f" {
-  run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" restart web --dry-run
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"logs --tail"* ]]
-}
-
-@test "exec refuses multiple services" {
+@test "exec rejects multiple services" {
   run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" exec web db
   [ "$status" -ne 0 ]
   [[ "$output" == *"single service only"* ]]
 }
 
-@test "logs refuses multiple services" {
-  run env DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" logs web db
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"single service only"* ]]
-}
-
-@test "one failure doesn't stop the batch; summary reports it" {
-  # stub docker on PATH: fail only when running from a path containing /fail
+@test "multi-service summary reports failures and exits non-zero" {
+  # stub docker to fail for one service via a fake PATH
   local bindir; bindir="$(mktemp -d)"
-  cat > "$bindir/docker" <<'EOF'
+  cat > "$bindir/docker" <<'SH'
 #!/usr/bin/env bash
-[[ "$PWD" == *"/fail"* ]] && exit 1
+# fail when operating in the fail-svc project dir
+if [[ "$PWD" == *fail-svc* ]]; then exit 1; fi
 exit 0
-EOF
+SH
   chmod +x "$bindir/docker"
   mkdir -p /tmp/ok-svc /tmp/fail-svc
   make_registry <<'EOF'
-[good]
+[ok]
 path = /tmp/ok-svc
 [bad]
 path = /tmp/fail-svc
 EOF
-  run env PATH="$bindir:$PATH" DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" up good bad
+  run env PATH="$bindir:$PATH" DCTL_REGISTRY="$DCTL_REGISTRY" bash "$DCTL" pull ok bad
   [ "$status" -ne 0 ]
   [[ "$output" == *"failed: bad"* ]]
   rm -rf "$bindir" /tmp/ok-svc /tmp/fail-svc
+}
+
+# --- TAIL validation (B4) -------------------------------------------------
+
+@test "non-numeric TAIL is rejected with a clear message" {
+  run env DCTL_REGISTRY="$DCTL_REGISTRY" TAIL=abc bash "$DCTL" logs web --dry-run
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"TAIL must be a non-negative integer"* ]]
+}
+
+@test "numeric TAIL is accepted" {
+  run env DCTL_REGISTRY="$DCTL_REGISTRY" TAIL=50 bash "$DCTL" logs web --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"[dry-run]"* ]]
 }

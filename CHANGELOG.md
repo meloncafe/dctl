@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-13
+
+Review-driven fixes and hardening. No breaking changes for well-formed
+registries.
+
+### Fixed
+
+- **`get_field` corrupted values containing `#`.** Inline-comment stripping
+  removed everything from the first `#`, so `post_up = echo "#done"` became
+  `echo "` and a URL like `http://x/y#frag` lost its fragment. Comment
+  stripping is now quote-aware: a `#` starts a comment only when it is outside
+  quotes **and** preceded by whitespace. A `#` inside quotes, attached to a
+  word, or at the start of a value is preserved. Quote a value if you need a
+  literal " #".
+- **`TAIL` is validated up front.** A non-numeric `TAIL` (e.g. `TAIL=abc`) now
+  fails with a clear message instead of producing a cryptic docker error later.
+
+### Added
+
+- **`validate` flags duplicate `[section]` names** instead of silently using
+  the first and ignoring the rest.
+- **`validate` warns on an over-permissive registry.** Because the registry can
+  hold hook command strings, a file readable by group/other is flagged with a
+  `chmod 600` suggestion.
+- **CI now lints `completion.bash`** alongside `dctl`.
+
 ## [0.5.1] - 2026-06-13
 
 Patch. No breaking changes.
@@ -168,7 +194,8 @@ First public release.
   the registry like a script you run as yourself — see the Security section in
   the README.
 
-[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/meloncafe/dctl/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/meloncafe/dctl/releases/tag/v0.6.0
 [0.5.1]: https://github.com/meloncafe/dctl/releases/tag/v0.5.1
 [0.5.0]: https://github.com/meloncafe/dctl/releases/tag/v0.5.0
 [0.4.1]: https://github.com/meloncafe/dctl/releases/tag/v0.4.1

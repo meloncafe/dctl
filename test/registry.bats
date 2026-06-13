@@ -72,3 +72,58 @@ EOF
   [ "${#lines[@]}" -eq 1 ]
   [ "${lines[0]}" = "only" ]
 }
+
+@test "get_field preserves a # inside double quotes" {
+  make_registry <<'REG'
+[svc]
+path = /srv
+post_up = echo "#done"
+REG
+  source "$DCTL_BIN"
+  run get_field svc post_up
+  [ "$output" = 'echo "#done"' ]
+}
+
+@test "get_field preserves a # inside single quotes" {
+  make_registry <<'REG'
+[svc]
+path = /srv
+post_up = echo '# not a comment'
+REG
+  source "$DCTL_BIN"
+  run get_field svc post_up
+  [ "$output" = "echo '# not a comment'" ]
+}
+
+@test "get_field preserves a # attached to a word (URL fragment)" {
+  make_registry <<'REG'
+[svc]
+path = /srv
+pre_up = curl http://x/y#frag
+REG
+  source "$DCTL_BIN"
+  run get_field svc pre_up
+  [ "$output" = "curl http://x/y#frag" ]
+}
+
+@test "get_field still strips a free-standing inline comment" {
+  make_registry <<'REG'
+[svc]
+path = /srv
+files = a.yml b.yml   # two files
+REG
+  source "$DCTL_BIN"
+  run get_field svc files
+  [ "$output" = "a.yml b.yml" ]
+}
+
+@test "get_field preserves an = inside the value" {
+  make_registry <<'REG'
+[svc]
+path = /srv
+post_up = echo "a=b=c"
+REG
+  source "$DCTL_BIN"
+  run get_field svc post_up
+  [ "$output" = 'echo "a=b=c"' ]
+}

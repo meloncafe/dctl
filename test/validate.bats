@@ -94,3 +94,42 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"problem(s)"* ]]
 }
+
+@test "validate flags duplicate section names" {
+  make_registry <<EOF2
+[web]
+path  = $VWORK/web
+files = docker-compose.yml
+[web]
+path  = $VWORK/web
+EOF2
+  chmod 600 "$DCTL_REGISTRY"
+  source "$DCTL_BIN"
+  run validate
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"duplicate service section: [web]"* ]]
+}
+
+@test "validate warns when the registry is group/other readable" {
+  make_registry <<EOF2
+[web]
+path  = $VWORK/web
+files = docker-compose.yml
+EOF2
+  chmod 644 "$DCTL_REGISTRY"
+  source "$DCTL_BIN"
+  run validate
+  [[ "$output" == *"readable by group/other"* ]]
+}
+
+@test "validate is quiet about permissions at 600" {
+  make_registry <<EOF2
+[web]
+path  = $VWORK/web
+files = docker-compose.yml
+EOF2
+  chmod 600 "$DCTL_REGISTRY"
+  source "$DCTL_BIN"
+  run validate
+  [[ "$output" != *"readable by group/other"* ]]
+}
